@@ -1,3 +1,4 @@
+// server.js
 import express from 'express';
 import multer from 'multer';
 import { createWorker } from 'tesseract.js';
@@ -29,8 +30,14 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     const { data: { words } } = await worker.recognize(buffer);
     await worker.terminate();
 
-    const match = words.find(w => w.text.trim().toLowerCase() === originalText.trim().toLowerCase());
-    if (!match) return res.status(404).json({ error: 'Text not found' });
+    const match = words.find(w =>
+      w.text.trim().toLowerCase().includes(originalText.trim().toLowerCase())
+    );
+
+    if (!match) {
+      console.log("OCR words:", words.map(w => w.text));
+      return res.status(404).json({ error: 'Text not found', ocr: words.map(w => w.text) });
+    }
 
     const image = await loadImage(buffer);
     const canvas = createCanvas(image.width, image.height);
@@ -60,7 +67,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
         input: {
           image: imageBase64,
           mask: maskBase64,
-          prompt: `Replace the text "${originalText}" with "${newText}" in the same font, size, and style.`
+          prompt: `Replace the text \"${originalText}\" with \"${newText}\" in the same font, size, and style.`
         },
       }),
     });
