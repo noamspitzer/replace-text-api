@@ -14,7 +14,7 @@ const upload = multer({ dest: 'uploads/' });
 app.use(cors());
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
-const MODEL_VERSION = "c11bac58203367db93a3c552bd49a25a5418458ddcb2d7a876081510d38911fa";
+const MODEL_VERSION = "e67bf6c4263c404f8c6f8d03e17a5a8e278dbbba0478b162a4df0c3cd752b1ec";
 
 app.post('/api/replace-text', upload.single('image'), async (req, res) => {
   try {
