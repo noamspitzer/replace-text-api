@@ -24,7 +24,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
 
     const buffer = fs.readFileSync(imageFile.path);
 
-    // OCR with Tesseract
+    // OCR: detect words
     const worker = await createWorker('eng');
     const { data: { words } } = await worker.recognize(buffer);
     await worker.terminate();
@@ -38,10 +38,11 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
       return res.status(404).json({ error: 'Text not found', ocr: words.map(w => w.text) });
     }
 
-    // Create mask with padding
+    // Create mask from match
     const image = await loadImage(buffer);
     const canvas = createCanvas(image.width, image.height);
     const ctx = canvas.getContext('2d');
+
     const padding = 20;
     const x0 = Math.max(0, match.bbox.x0 - padding);
     const y0 = Math.max(0, match.bbox.y0 - padding);
@@ -56,6 +57,14 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     const imageBase64 = `data:${imageFile.mimetype};base64,${buffer.toString('base64')}`;
     const maskBuffer = canvas.toBuffer('image/png');
     const maskBase64 = `data:image/png;base64,${maskBuffer.toString('base64')}`;
+
+    // Validate base64 data
+    if (!imageBase64 || !maskBase64) {
+      console.error("Missing base64 inputs:");
+      console.log("imageBase64:", imageBase64?.slice?.(0, 100));
+      console.log("maskBase64:", maskBase64?.slice?.(0, 100));
+      return res.status(500).json({ error: "Missing base64 image or mask before calling Replicate." });
+    }
 
     // Call Replicate API
     const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
@@ -85,7 +94,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
       throw new Error("Replicate response did not include a polling URL. Full response: " + JSON.stringify(prediction));
     }
 
-    // Poll for completion
+    // Polling for result
     const endpointUrl = prediction.urls.get;
     let result;
     for (let i = 0; i < 30; i++) {
