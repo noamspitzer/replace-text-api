@@ -73,11 +73,15 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     });
 
     const prediction = await replicateRes.json();
-    console.log("Replicate response:", prediction);
+console.log("Raw replicate response:", JSON.stringify(prediction, null, 2));
 
-    if (!prediction?.urls?.get) {
-      throw new Error("Replicate response did not include a polling URL.");
-    }
+if (!replicateRes.ok) {
+  throw new Error("Replicate API error: " + JSON.stringify(prediction));
+}
+
+if (!prediction?.urls?.get) {
+  throw new Error("Replicate response did not include a polling URL. Full response: " + JSON.stringify(prediction));
+}
 
     const endpointUrl = prediction.urls.get;
     let result;
