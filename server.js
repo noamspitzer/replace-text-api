@@ -30,7 +30,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     await worker.terminate();
 
     const match = words.find(w =>
-      w.text.toLowerCase().includes(originalText.toLowerCase())
+      w.text.trim().toLowerCase().includes(originalText.trim().toLowerCase())
     );
 
     if (!match) {
@@ -42,6 +42,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     const canvas = createCanvas(image.width, image.height);
     const ctx = canvas.getContext('2d');
     const padding = 20;
+
     const x0 = Math.max(0, match.bbox.x0 - padding);
     const y0 = Math.max(0, match.bbox.y0 - padding);
     const x1 = Math.min(image.width, match.bbox.x1 + padding);
@@ -53,9 +54,10 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 
     const imageBase64 = `data:${imageFile.mimetype};base64,${buffer.toString('base64')}`;
-    const maskBase64 = `data:image/png;base64,${canvas.toBuffer().toString('base64')}`;
+    const maskBuffer = canvas.toBuffer('image/png');
+    const maskBase64 = `data:image/png;base64,${maskBuffer.toString('base64')}`;
 
-    // Call Replicate
+    // קריאה ל־Replicate
     const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
@@ -68,51 +70,51 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
           image: imageBase64,
           mask: maskBase64,
           prompt: `Replace the text "${originalText}" with "${newText}" in the same font, size, and style.`,
-          guidance_scale: 7.5,
-          num_inference_steps: 50
-        }
+        },
       }),
     });
 
     const prediction = await replicateRes.json();
 
     if (!replicateRes.ok) {
-      return res.status(500).json({ error: prediction?.detail || 'Replicate API error' });
+      console.error("Replicate error:", prediction);
+      return res.status(500).json({ error: "Replicate API error", details: prediction });
     }
 
-    const endpointUrl = prediction?.urls?.get;
-    if (!endpointUrl) {
-      return res.status(500).json({ error: 'Missing polling URL from Replicate' });
+    if (!prediction?.urls?.get) {
+      return res.status(500).json({ error: "Replicate response missing polling URL", details: prediction });
     }
 
-    // Poll
+    const endpointUrl = prediction.urls.get;
     let result;
     for (let i = 0; i < 30; i++) {
       const poll = await fetch(endpointUrl, {
         headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
       });
-      const pollData = await poll.json();
-      if (pollData.status === 'succeeded') {
-        result = pollData.output?.[0];
+      const status = await poll.json();
+      if (status.status === 'succeeded') {
+        result = status.output[0];
         break;
-      } else if (pollData.status === 'failed') {
-        return res.status(500).json({ error: 'Replicate failed to process image' });
+      }
+      if (status.status === 'failed') {
+        return res.status(500).json({ error: 'Processing failed', details: status });
       }
       await new Promise(r => setTimeout(r, 1000));
     }
 
     fs.unlinkSync(imageFile.path);
+
     if (!result) {
-      return res.status(500).json({ error: 'Timeout waiting for Replicate result' });
+      return res.status(500).json({ error: 'Timeout waiting for image result' });
     }
 
-    return res.json({ result });
+    res.json({ result });
 
   } catch (err) {
-    console.error("Fatal server error:", err);
-    return res.status(500).json({ error: err.message || 'Unexpected server error' });
+    console.error("Server error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server listening on port ${PORT}`));
