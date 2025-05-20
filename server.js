@@ -34,7 +34,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     );
 
     if (!match) {
-      console.log("OCR words:", words.map(w => w.text));
+      console.log("❌ Text not found. OCR words:", words.map(w => w.text));
       return res.status(404).json({ error: 'Text not found', ocr: words.map(w => w.text) });
     }
 
@@ -55,18 +55,15 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 
     const imageBase64 = `data:${imageFile.mimetype};base64,${buffer.toString('base64')}`;
-    const maskBuffer = canvas.toBuffer('image/png');
-    const maskBase64 = `data:image/png;base64,${maskBuffer.toString('base64')}`;
+    const maskBase64 = `data:image/png;base64,${canvas.toBuffer('image/png').toString('base64')}`;
 
     // Validate base64 data
     if (!imageBase64 || !maskBase64) {
-      console.error("Missing base64 inputs:");
-      console.log("imageBase64:", imageBase64?.slice?.(0, 100));
-      console.log("maskBase64:", maskBase64?.slice?.(0, 100));
-      return res.status(500).json({ error: "Missing base64 image or mask before calling Replicate." });
+      console.error("❌ Missing base64 inputs");
+      return res.status(500).json({ error: "Missing image or mask" });
     }
 
-    // Call Replicate API
+    // Call Replicate
     const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
@@ -84,42 +81,49 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     });
 
     const prediction = await replicateRes.json();
-    console.log("Raw replicate response:", JSON.stringify(prediction, null, 2));
+    console.log("📦 Replicate response:", JSON.stringify(prediction, null, 2));
 
     if (!replicateRes.ok) {
       throw new Error("Replicate API error: " + JSON.stringify(prediction));
     }
 
     if (!prediction?.urls?.get) {
-      throw new Error("Replicate response did not include a polling URL. Full response: " + JSON.stringify(prediction));
+      throw new Error("Missing polling URL in Replicate response");
     }
 
-    // Polling for result
+    // Poll for result
     const endpointUrl = prediction.urls.get;
     let result;
     for (let i = 0; i < 30; i++) {
       const poll = await fetch(endpointUrl, {
         headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
       });
+
       const status = await poll.json();
+      console.log(`🔁 Poll #${i + 1}: ${status.status}`);
+
       if (status.status === 'succeeded') {
-        result = status.output[0];
+        result = status.output?.[0];
         break;
       }
-      if (status.status === 'failed') throw new Error("Processing failed");
+
+      if (status.status === 'failed') {
+        throw new Error("❌ Replicate processing failed");
+      }
+
       await new Promise(r => setTimeout(r, 1000));
     }
 
     fs.unlinkSync(imageFile.path);
-    if (!result) return res.status(500).json({ error: 'Timeout' });
+    if (!result) return res.status(500).json({ error: 'Timeout while polling Replicate' });
 
     res.json({ result });
 
   } catch (err) {
-    console.error("Server error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("🔥 Server error:", err);
+    res.status(500).json({ error: err.message || 'Unknown error' });
   }
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server listening on port ${PORT}`));
