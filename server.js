@@ -9,9 +9,7 @@ import path from 'path';
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
-app.use(cors({
-  origin: 'https://your-site.netlify.app'
-}));
+app.use(cors());
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
 const MODEL_VERSION = "95b7223104132402a9ae91cc677285bc5eb997834bd2349fa486f53910fd68b3";
@@ -78,7 +76,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
         input: {
           image: imageBase64,
           mask: maskBase64,
-          prompt: `The image shows a promotional banner. In the masked area, write the word "${newText}" in the exact same font, size, color, and alignment as the removed word "${originalText}". Match the surrounding design and layout. The background must look natural.`,
+          prompt: `Replace the text "${originalText}" with "${newText}" in the same font, size, and style.`,
         },
       }),
     });
