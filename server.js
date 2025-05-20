@@ -5,6 +5,7 @@ import { createCanvas, loadImage } from 'canvas';
 import fetch from 'node-fetch';
 import fs from 'fs';
 import cors from 'cors';
+import path from 'path';
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
@@ -24,7 +25,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
 
     const buffer = fs.readFileSync(imageFile.path);
 
-    // OCR
+    // OCR: detect words
     const worker = await createWorker('eng');
     const { data: { words } } = await worker.recognize(buffer);
     await worker.terminate();
@@ -34,15 +35,16 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     );
 
     if (!match) {
+      console.log("OCR words:", words.map(w => w.text));
       return res.status(404).json({ error: 'Text not found', ocr: words.map(w => w.text) });
     }
 
-    // Create mask
+    // Create mask based on bbox
     const image = await loadImage(buffer);
     const canvas = createCanvas(image.width, image.height);
     const ctx = canvas.getContext('2d');
-    const padding = 20;
 
+    const padding = 20;
     const x0 = Math.max(0, match.bbox.x0 - padding);
     const y0 = Math.max(0, match.bbox.y0 - padding);
     const x1 = Math.min(image.width, match.bbox.x1 + padding);
@@ -57,7 +59,12 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     const maskBuffer = canvas.toBuffer('image/png');
     const maskBase64 = `data:image/png;base64,${maskBuffer.toString('base64')}`;
 
-    // קריאה ל־Replicate
+    // Validate before sending to Replicate
+    if (!imageBase64 || !maskBase64) {
+      return res.status(500).json({ error: 'Failed to generate image or mask for inpainting.' });
+    }
+
+    // Call Replicate
     const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
@@ -75,44 +82,37 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     });
 
     const prediction = await replicateRes.json();
+    console.log("Replicate response:", JSON.stringify(prediction, null, 2));
 
-    if (!replicateRes.ok) {
-      console.error("Replicate error:", prediction);
-      return res.status(500).json({ error: "Replicate API error", details: prediction });
+    if (!replicateRes.ok || !prediction?.urls?.get) {
+      return res.status(500).json({ error: 'Failed to create prediction', details: prediction });
     }
 
-    if (!prediction?.urls?.get) {
-      return res.status(500).json({ error: "Replicate response missing polling URL", details: prediction });
-    }
-
-    const endpointUrl = prediction.urls.get;
+    // Poll for result
+    const pollUrl = prediction.urls.get;
     let result;
     for (let i = 0; i < 30; i++) {
-      const poll = await fetch(endpointUrl, {
+      const pollRes = await fetch(pollUrl, {
         headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
       });
-      const status = await poll.json();
+      const status = await pollRes.json();
       if (status.status === 'succeeded') {
-        result = status.output[0];
+        result = status.output?.[0];
         break;
       }
       if (status.status === 'failed') {
-        return res.status(500).json({ error: 'Processing failed', details: status });
+        return res.status(500).json({ error: 'Replicate processing failed' });
       }
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
 
     fs.unlinkSync(imageFile.path);
-
-    if (!result) {
-      return res.status(500).json({ error: 'Timeout waiting for image result' });
-    }
+    if (!result) return res.status(500).json({ error: 'Timeout waiting for result' });
 
     res.json({ result });
-
   } catch (err) {
-    console.error("Server error:", err);
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
   }
 });
 
