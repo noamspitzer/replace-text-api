@@ -25,7 +25,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
 
     const buffer = fs.readFileSync(imageFile.path);
 
-    // OCR: detect words
+    // OCR: detect text
     const worker = await createWorker('eng');
     const { data: { words } } = await worker.recognize(buffer);
     await worker.terminate();
@@ -35,21 +35,18 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     );
 
     if (!match) {
-      console.log("OCR words:", words.map(w => w.text));
       return res.status(404).json({ error: 'Text not found', ocr: words.map(w => w.text) });
     }
 
-    // Create mask based on bbox
+    // Create mask
     const image = await loadImage(buffer);
     const canvas = createCanvas(image.width, image.height);
     const ctx = canvas.getContext('2d');
-
     const padding = 20;
     const x0 = Math.max(0, match.bbox.x0 - padding);
     const y0 = Math.max(0, match.bbox.y0 - padding);
     const x1 = Math.min(image.width, match.bbox.x1 + padding);
     const y1 = Math.min(image.height, match.bbox.y1 + padding);
-
     ctx.fillStyle = 'black';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = 'white';
@@ -59,13 +56,8 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     const maskBuffer = canvas.toBuffer('image/png');
     const maskBase64 = `data:image/png;base64,${maskBuffer.toString('base64')}`;
 
-    // Validate before sending to Replicate
-    if (!imageBase64 || !maskBase64) {
-      return res.status(500).json({ error: 'Failed to generate image or mask for inpainting.' });
-    }
-
-    // Call Replicate
-    const replicateRes = await fetch("https://api.replicate.com/v1/predictions", {
+    // Step 1: remove original text
+    const step1Res = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
         "Authorization": `Token ${REPLICATE_API_TOKEN}`,
@@ -76,40 +68,79 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
         input: {
           image: imageBase64,
           mask: maskBase64,
-          prompt: `Replace the text "${originalText}" with "${newText}" in the same font, size, and style.`,
+          prompt: "Remove any text in the masked area and leave it completely blank with background only.",
         },
       }),
     });
 
-    const prediction = await replicateRes.json();
-    console.log("Replicate response:", JSON.stringify(prediction, null, 2));
-
-    if (!replicateRes.ok || !prediction?.urls?.get) {
-      return res.status(500).json({ error: 'Failed to create prediction', details: prediction });
+    const step1 = await step1Res.json();
+    if (!step1Res.ok || !step1?.urls?.get) {
+      return res.status(500).json({ error: 'Step 1 failed', details: step1 });
     }
 
-    // Poll for result
-    const pollUrl = prediction.urls.get;
-    let result;
+    // Poll for step 1
+    let cleanedImage;
     for (let i = 0; i < 30; i++) {
-      const pollRes = await fetch(pollUrl, {
+      const poll = await fetch(step1.urls.get, {
         headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
       });
-      const status = await pollRes.json();
+      const status = await poll.json();
       if (status.status === 'succeeded') {
-        result = status.output?.[0];
+        cleanedImage = status.output?.[0];
         break;
       }
       if (status.status === 'failed') {
-        return res.status(500).json({ error: 'Replicate processing failed' });
+        return res.status(500).json({ error: 'Step 1 polling failed' });
       }
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    if (!cleanedImage) return res.status(500).json({ error: 'Step 1 timed out' });
+
+    // Step 2: add new text
+    const step2Res = await fetch("https://api.replicate.com/v1/predictions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${REPLICATE_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        version: MODEL_VERSION,
+        input: {
+          image: cleanedImage,
+          mask: maskBase64,
+          prompt: `Add the word "${newText}" in bold, uppercase blue futuristic font. Align it with the design and match the original style.`,
+        },
+      }),
+    });
+
+    const step2 = await step2Res.json();
+    if (!step2Res.ok || !step2?.urls?.get) {
+      return res.status(500).json({ error: 'Step 2 failed', details: step2 });
+    }
+
+    // Poll for step 2
+    let finalImage;
+    for (let i = 0; i < 30; i++) {
+      const poll = await fetch(step2.urls.get, {
+        headers: { Authorization: `Token ${REPLICATE_API_TOKEN}` },
+      });
+      const status = await poll.json();
+      if (status.status === 'succeeded') {
+        finalImage = status.output?.[0];
+        break;
+      }
+      if (status.status === 'failed') {
+        return res.status(500).json({ error: 'Step 2 polling failed' });
+      }
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     fs.unlinkSync(imageFile.path);
-    if (!result) return res.status(500).json({ error: 'Timeout waiting for result' });
+    if (!finalImage) return res.status(500).json({ error: 'Step 2 timed out' });
 
-    res.json({ result });
+    res.json({ result: finalImage });
+
   } catch (err) {
     console.error('Server error:', err);
     res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
