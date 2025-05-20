@@ -11,7 +11,7 @@ const upload = multer({ dest: 'uploads/' });
 app.use(cors());
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
-const MODEL_VERSION = "95b722319f13c7ed2c9e624cb4c81b81b60446e92a4e66644c8b20c1b2ec6404";
+const MODEL_VERSION = "95b7223104132402a9ae91cc677285bc5eb997834bd2349fa486f53910fd68b3";
 
 app.post('/api/replace-text', upload.single('image'), async (req, res) => {
   try {
@@ -67,7 +67,9 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
         input: {
           image: imageBase64,
           mask: maskBase64,
-          prompt: `Replace the text "${originalText}" with "${newText}" in the same font, size, and style.`
+          prompt: `Replace the text "${originalText}" with "${newText}" in the same font, size, and style.`,
+          guidance_scale: 7.5,
+          num_inference_steps: 50
         }
       }),
     });
@@ -100,7 +102,6 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
     }
 
     fs.unlinkSync(imageFile.path);
-
     if (!result) {
       return res.status(500).json({ error: 'Timeout waiting for Replicate result' });
     }
