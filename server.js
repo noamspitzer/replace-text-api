@@ -76,7 +76,7 @@ app.post('/api/replace-text', upload.single('image'), async (req, res) => {
         input: {
           image: imageBase64,
           mask: maskBase64,
-          prompt: `Replace the text "${originalText}" with "${newText}" in the same font, size, and style.`,
+          prompt: `The image shows a promotional banner. In the masked area, write the word "${newText}" in the exact same font, size, color, and alignment as the removed word "${originalText}". Match the surrounding design and layout. The background must look natural.`,
         },
       }),
     });
