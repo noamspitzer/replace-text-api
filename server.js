@@ -9,7 +9,9 @@ import path from 'path';
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
-app.use(cors());
+app.use(cors({
+  origin: 'https://your-site.netlify.app'
+}));
 
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
 const MODEL_VERSION = "95b7223104132402a9ae91cc677285bc5eb997834bd2349fa486f53910fd68b3";
